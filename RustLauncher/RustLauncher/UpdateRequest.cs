@@ -7,6 +7,7 @@ using System.Net;
 using System.IO;
 using System.Threading;
 using System.ComponentModel;
+using Ionic.Zip;
 
 namespace RustLauncher
 {
@@ -26,6 +27,9 @@ namespace RustLauncher
         public EventHandler ProgressChanged;
         public EventHandler DownloadCompleted;
         public EventHandler InstallationCompleted;
+        private string _packageFile = "Update.package";
+        private string _dAddress;
+        private bool downloading = true;
 
         #endregion
         public UpdateRequest(string updateServerAddress, string versionFile)
@@ -43,7 +47,8 @@ namespace RustLauncher
             {
                 using (WebClient client = new WebClient())
                 {
-                    sVersion = client.DownloadString(_address);
+                    sVersion = client.DownloadString(_address).Split('|')[0];
+                    _dAddress = client.DownloadString(_address).Split('|')[1];
                 }
             }
             catch (Exception e)
@@ -70,9 +75,42 @@ namespace RustLauncher
         }
         public bool Update()
         {
-            if (_failed) return false;
-            DownloadUpdatePackage();
-            return true;
+            try
+            {
+                if (_failed) return false;
+                DownloadUpdatePackage();
+                while(downloading)
+                {
+                    Thread.Sleep(100);
+                }
+                InstallUpdate();
+                return true;
+            }
+            catch (Exception e)
+            {
+                throw e;
+                return false;
+            }
+
+        }
+
+        private void InstallUpdate()
+        {
+            var zip = new ZipFile(_packageFile);
+            zip.ExtractProgress += Zip_ExtractProgress;
+
+            _counterThread.Start();
+            zip.ExtractAll("./", ExtractExistingFileAction.OverwriteSilently);
+            _counterThread.Abort();
+            if(InstallationCompleted!= null)
+            InstallationCompleted(this, null);
+            ResetCounter();
+        }
+
+        private void Zip_ExtractProgress(object sender, ExtractProgressEventArgs e)
+        {
+            _total = e.EntriesTotal;
+            _completed = e.EntriesExtracted;
         }
 
         private void DownloadUpdatePackage()
@@ -81,7 +119,7 @@ namespace RustLauncher
             WebClient c = new WebClient();
             c.DownloadProgressChanged += C_DownloadProgressChanged;
             c.DownloadFileCompleted += C_DownloadFileCompleted;
-            c.DownloadFileAsync(new Uri(_address), "Update.package");
+            c.DownloadFileAsync(new Uri(_dAddress), _packageFile);
             ResetCounter();
         }
 
@@ -99,12 +137,22 @@ namespace RustLauncher
 
                 if (_completed != 0)
                     _percentage = (byte)(100 * _total / _completed);
+                if (ProgressChanged != null)
+                {
+                    ProgressEventArgs p = new ProgressEventArgs();
+                    p.Percentage = _percentage;
+                    p.BytesDone=_completed;
+                    p.BytesTotal = _total;
+                    ProgressChanged(this,new ProgressChangedEventArgs(_percentage,null));
+                }
+
                 Thread.Sleep(100);
             }
         }
 
         private void C_DownloadFileCompleted(object sender, AsyncCompletedEventArgs e)
         {
+            downloading = false;
             if (DownloadCompleted != null)
                 DownloadCompleted(this, null);
         }
@@ -119,7 +167,7 @@ namespace RustLauncher
                 z.Percentage = _percentage;
                 z.BytesTotal = e.TotalBytesToReceive;
                 z.BytesDone = e.BytesReceived;
-                ProgressChanged(this, z);
+                ProgressChanged(this,new ProgressChangedEventArgs(_percentage,null));
             }
         }
 
